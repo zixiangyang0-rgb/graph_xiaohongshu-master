@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<!--
+================================================================================
+前端入口 HTML - AI 内容运营助手
+================================================================================
+
+职责说明：
+  作为 Vue 3 + Vite 单页应用 (SPA) 的入口页面，负责：
+  1. 定义页面基本结构（lang="zh-CN" 声明中文内容）
+  2. 加载 favicon 图标
+  3. 设置页面标题和元信息（SEO/社交分享）
+  4. 提供 Vue 应用挂载点（<div id="app">）
+  5. 引入 Vite 客户端模块（用于 HMR 热更新）
+
+工作流程：
+  1. 浏览器请求 http://localhost:5173/
+  2. Vite Dev Server 返回此 index.html
+  3. 浏览器解析 HTML，加载 CSS/JS 资源
+  4. main.js 创建 Vue 应用并挂载到 <div id="app"></div>
+  5. Vue 渲染 App.vue 根组件
+
+典型场景：
+  - 开发模式：Vite Dev Server 提供 HMR（热模块替换），无需刷新页面即可看到代码改动
+  - 生产模式：构建后的 index.html 包含压缩后的静态资源引用
+
+注意事项：
+  - Vite 的客户端脚本 vite.client.js 是开发服务必需的，不能删除
+  - 生产构建时，Vite 会自动将资源路径转换为正确的 CDN 或相对路径
+================================================================================
+-->
+<head>
+  <meta charset="UTF-8">
+  <!--
+    charset: 字符编码
+    - UTF-8 是互联网最通用的编码，支持所有语言字符（包括中文 Emoji）
+    - 必须在 <head> 最前面，避免中文乱码
+  -->
+
+  <!--
+    viewport: 移动端视口配置
+    - width=device-width: 视口宽度等于设备宽度（不缩放）
+    - initial-scale=1.0: 初始缩放比例为 1（不放大也不缩小）
+    - 这两个设置是响应式布局的基础，确保手机/平板上布局正常
+  -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <!--
+    description: 页面描述（SEO + 社交分享）
+    - 搜索引擎会提取这段文字作为搜索结果摘要
+    - 社交平台（微信/微博）分享时会显示这段描述
+  -->
+  <meta name="description" content="AI 内容运营助手 - 智能生成小红书风格的优质文章和配图">
+
+  <!--
+    title: 浏览器标签页和收藏夹显示的标题
+    - 建议简短有辨识度，包含品牌名和功能描述
+  -->
+  <title>AI 内容运营助手</title>
+
+  <!--
+    favicon: 网站图标
+    - 定义在 public/favicon.ico（Vite 默认约定）
+    - 浏览器标签页和书签栏显示
+    - 现代浏览器还支持 SVG 格式（public/favicon.svg）
+  -->
+
+  <!--
+    link: 预连接优化（可选）
+    - 如果将来引入外部 CDN 资源（如 Google Fonts），可以在这里预连接
+    - 减少 DNS 解析和 TCP 握手时间
+    - 格式：<link rel="preconnect" href="https://xxx.com" crossorigin>
+  -->
+</head>
+
+<body>
+  <!--
+    Vue 应用挂载点
+    - Vue 3 会将 App.vue 根组件渲染到这个 div 中
+    - 所有前端 UI 都从这里开始
+    - 重要：id="app" 是 Vite 和 main.js 约定的挂载点，不能改名
+  -->
+  <div id="app"></div>
+
+  <!--
+    Vite 客户端模块
+    - type="module" 表示这是一个 ES Module（import/export 语法）
+    - Vite Dev Server 使用这个脚本提供热更新功能
+    - 生产环境：Vite 构建时会移除这个引用
+  -->
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

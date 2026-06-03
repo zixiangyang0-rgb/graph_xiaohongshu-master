@@ -1,0 +1,145 @@
+# =============================================================================
+# Python 项目依赖清单
+# =============================================================================
+#
+# 职责说明：
+#   列出项目所有 Python 第三方依赖及其版本约束，供 pip 安装。
+#
+# 使用方法：
+#   1. 创建虚拟环境：python -m venv venv
+#   2. 激活环境：source venv/bin/activate
+#   3. 安装依赖：pip install -r requirements.txt
+#
+# 依赖分组：
+#   - 核心框架：FastAPI, SQLAlchemy
+#   - 异步支持：psycopg (PostgreSQL), aiofiles
+#   - 认证：python-jose (JWT), passlib (密码哈希)
+#   - LLM/AI：langchain, langgraph
+#   - 日志：structlog
+#   - HTTP 客户端：httpx (用于 Gemini 图像生成 API)
+#   - 配置：pydantic, pydantic-settings
+#   - 开发/测试：uvicorn, python-multipart
+#
+# 字段含义：
+#   ~=：兼容版本（>=1.0.0 且 <2.0.0）
+#   ==：精确版本
+#   >=：最低版本要求
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Web 框架 & ASGI 服务器
+# -----------------------------------------------------------------------------
+
+# FastAPI：现代高性能 Python Web 框架，支持类型提示和自动文档生成
+# 典型场景：构建 RESTful API，定义请求/响应模型，自动生成 OpenAPI 文档
+fastapi>=0.109.0
+
+# Uvicorn：ASGI 异步服务器，运行 FastAPI 应用
+# 典型场景：uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+uvicorn[standard]>=0.27.0
+
+# python-multipart：支持 FastAPI 处理 multipart/form-data（文件上传）
+# 典型场景：将来如需支持图片上传功能
+python-multipart>=0.0.6
+
+# -----------------------------------------------------------------------------
+# 数据持久化 & ORM
+# -----------------------------------------------------------------------------
+
+# SQLAlchemy 2.0+：Python ORM，支持异步操作
+# 典型场景：定义 User 模型，查询用户数据，管理数据库连接
+sqlalchemy>=2.0.25
+
+# psycopg[binary,pool]：PostgreSQL 异步驱动（binary 内置 libpq，pool 提供连接池）
+# 典型场景：LangGraph Checkpointer 持久化工作流状态到 PostgreSQL
+psycopg[binary,pool]>=3.1.18
+
+# aiofiles：异步文件操作库
+# 典型场景：将生成的图片写入 static/images/generated/ 目录
+aiofiles>=23.2.1
+
+#aiosqlite>=0.19.0
+
+# -----------------------------------------------------------------------------
+# 配置 & 数据验证
+# -----------------------------------------------------------------------------
+
+# Pydantic 2.0+：数据验证库，定义请求/响应模型和环境变量配置
+# 典型场景：定义 LoginRequest, TokenResponse 等 API 模型
+pydantic>=2.5.0
+
+# pydantic-settings：Pydantic 的扩展，专门处理 .env 环境变量
+# 典型场景：从 .env 文件读取 DATABASE_URL, SECRET_KEY 等配置
+pydantic-settings>=2.1.0
+
+# -----------------------------------------------------------------------------
+# 认证 & 安全
+# -----------------------------------------------------------------------------
+
+# python-jose[cryptography]：JWT（JSON Web Token）生成和验证
+# 典型场景：登录成功后签发 token，API 请求时验证 token
+python-jose[cryptography]>=3.3.0
+
+# passlib[argon2]：密码哈希库，支持 argon2 算法
+# 典型场景：注册时哈希密码，登录时验证密码
+passlib[argon2]>=1.7.4
+
+# bcrypt：密码哈希后端（passlib 的依赖项）
+bcrypt>=4.1.0
+
+# -----------------------------------------------------------------------------
+# LangChain & LangGraph（AI 工作流）
+# -----------------------------------------------------------------------------
+
+# langchain：LangChain 核心库（用于 LLM 调用、Prompt 管理）
+# 典型场景：构建 PromptTemplate，调用 ChatOpenAI（Volcengine Doubao）
+langchain>=0.1.0
+
+# langchain-core：LangChain 核心抽象（BaseMessage, PromptValue 等）
+# 典型场景：定义 LLM 输入输出的数据结构
+langchain-core>=0.1.10
+
+# langgraph：构建有状态、多步骤的 AI 工作流
+# 典型场景：定义节点（planner, writer, visualizer）、边（edges）、子图（subgraph）
+# 关键特性：interrupt（人工介入）、Command（恢复执行）、Checkpointer（状态持久化）
+langgraph>=0.2.0
+
+# langgraph-checkpoint：LangGraph 官方 PostgreSQL 检查点持久化
+# 典型场景：将工作流状态保存到 PostgreSQL，支持断点续传
+langgraph-checkpoint>=2.0.0
+
+# langgraph-cli：LangGraph 命令行工具（开发用）
+# 典型场景：langgraph dev 启动开发服务器
+#langgraph-cli[in-memory]>=0.1.0
+
+# openai：OpenAI 兼容接口（LangChain 内部使用）
+# 典型场景：配置 ChatOpenAI 兼容的 Volcengine Doubao API
+openai>=1.12.0
+
+# httpx：异步 HTTP 客户端（LangChain 回调和自定义 API 调用）
+# 典型场景：直接调用 Gemini Image API 生成图片
+httpx>=0.26.0
+
+# tiktoken：快速 BPE 分词器（用于估算 token 数量和成本）
+# 典型场景：在 LLM 调用前估算 token 使用量
+tiktoken>=0.5.0
+
+# langsmith：LLM 应用的可观测性平台（追踪、监控）
+# 典型场景：追踪 LLM 调用、查看 token 消耗、调试 AI 工作流
+langsmith>=0.1.0
+
+# -----------------------------------------------------------------------------
+# 日志 & 监控
+# -----------------------------------------------------------------------------
+
+# structlog：结构化日志库，输出机器可读的 JSON 日志
+# 典型场景：记录请求上下文（request_id, user_id），日志聚合分析
+structlog>=24.1.0
+
+# -----------------------------------------------------------------------------
+# 其他工具
+# -----------------------------------------------------------------------------
+
+# python-dotenv：从 .env 文件加载环境变量
+# 典型场景：本地开发时从 .env 文件读取配置
+python-dotenv>=1.0.0

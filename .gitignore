@@ -1,0 +1,126 @@
+# =============================================================================
+# Git 忽略文件配置
+# =============================================================================
+#
+# 职责说明：
+#   定义 Git 版本控制系统应忽略的文件/目录，不纳入版本管理。
+#   主要包括：敏感信息、临时文件、构建产物、依赖缓存、IDE 配置等。
+#
+# 典型场景：
+#   - .env 文件包含数据库密码和 API Key，不能提交到代码仓库
+#   - __pycache__/ 是 Python 运行时自动生成的字节码缓存，无需跟踪
+#   - node_modules/ 是 npm 包目录，体积庞大且可从 package.json 重新安装
+#   - static/images/generated/ 是运行时生成的图片，每次运行都会变化
+#
+# 字段含义：
+#   # 注释：说明该规则的作用
+#   *.pyc：忽略所有 .pyc 字节码文件
+#   __pycache__/：忽略该目录及子目录下的所有文件
+#   .env：忽略根目录的 .env（通常包含 SECRET_KEY, DATABASE_URL 等敏感配置）
+#   .env.local, .env.production：不同环境的配置变体
+#   .DS_Store：macOS 系统文件（桌面图标位置信息），由 Finder 自动生成
+# =============================================================================
+
+# Python
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Unit test / coverage
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+
+# Translations
+*.mo
+*.pot
+
+# Environments
+# 环境变量文件：通常包含数据库密码、API Key 等敏感信息
+# 重要：项目根目录应有一个 .env.example 作为模板，但不包含真实密钥
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# IDE
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+.vscode/
+*.code-workspace
+
+# Logs
+*.log
+logs/
+*.sqlite
+*.sqlite3
+
+# Database
+*.db
+
+# media
+static/images/generated/
+generated_images/
+
+# Node (if used)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm
+.eslintcache
+.node_repl_history
+
+# Typescript
+*.tsbuildinfo
+
+# Frontend
+frontend/node_modules/
+dist/
+*.local
+
+# Project specific
+checkpoints/
