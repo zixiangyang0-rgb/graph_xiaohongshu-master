@@ -22,6 +22,7 @@
 
 import os
 import sys
+from urllib.parse import urlparse
 
 # 从项目根目录的 core 模块导入配置
 # get_settings() 读取 .env 中的 DATABASE_URL 环境变量
@@ -46,18 +47,19 @@ def test_connection():
     print("PostgreSQL 数据库连接测试")
     print("=" * 60)
 
-    # 第 1 步：获取数据库连接 URL
     settings = get_settings()
     print(f"\n数据库 URL: {settings.database_url}")
-    # 隐藏密码，仅显示连接信息（不打印明文密码）
-    print(f"连接参数: host={settings.async_database_url.host}, "
-          f"port={settings.async_database_url.port}, "
-          f"dbname={settings.async_database_url.database}")
+    # 第 2 步：直接从 URL 字符串解析连接参数用于显示（不用于连接）
+    from urllib.parse import urlparse
+    parsed = urlparse(settings.database_url)
+    print(f"连接参数: host={parsed.hostname}, "
+          f"port={parsed.port}, "
+          f"dbname={parsed.path.lstrip('/')}")
 
     # 第 2 步：解析 psycopg 连接参数
     # psycopg 直接接受 libpq 连接字符串格式，无需手动解析
-    # 直接使用 settings.database_url（普通字符串格式）
-    db_url = settings.database_url
+    # 直接使用 settings.postgres_uri（标准字符串格式，用于 psycopg）
+    db_url = settings.postgres_uri
 
     print("\n正在连接数据库...")
 

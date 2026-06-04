@@ -30,7 +30,7 @@ PII（个人身份信息）脱敏模块
 """
 import re
 import hashlib
-from typing import Callable, Literal, Optional
+from typing import Callable, Literal, Optional, Union
 from dataclasses import dataclass, field
 
 
@@ -251,7 +251,7 @@ class PIIAnonymizer:
         self,
         pii_type: str,
         strategy: Strategy = "redact",
-        detector: Optional[str | re.Pattern | Callable] = None,
+        detector: Optional[Union[str, re.Pattern, Callable]] = None,
     ) -> "PIIAnonymizer":
         """
         注册一个 PII 检测模式

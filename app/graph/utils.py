@@ -38,7 +38,7 @@ from app.core.config import settings
 _checkpointer: Union[AsyncPostgresSaver, None] = None
 
 # PostgreSQL 连接池单例
-_connection_pool: AsyncConnectionPool | None = None
+_connection_pool: Union[AsyncConnectionPool, None] = None
 
 
 # =============================================================================
