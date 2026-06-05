@@ -127,17 +127,23 @@ POSTGRES_URI=postgresql://postgres:your_password@localhost:5432/graph_xiaohongsh
 
 # JWT 密钥：用于签名用户 Token，建议使用 32+ 字符随机字符串
 # 生成方法：python -c "import secrets; print(secrets.token_hex(32))"
-SECRET_KEY=your_super_secret_key_here_change_in_production
+JWT_SECRET_KEY=your_super_secret_key_here_change_in_production
 
-# 火山引擎（豆包/Doubao）API 配置
+# 火山引擎（豆包/Doubao）LLM API 配置
 # 获取地址：https://console.volcengine.com/ark
-VOLCENGINE_API_KEY=your_volcengine_api_key
-# 通常为 "ep-xxxxx" 格式的 endpoint
-VOLCENGINE_API_BASE=https://ark.cn-beijing.volcengineapi.com
+LLM_API_KEY=your_volcengine_api_key
+# API 地址，火山引擎北京区域
+LLM_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
+# 可选：指定模型版本，默认 doubao-seed-1-8-251228（写作）/ doubao-seed-1-6-flash-250828（选题）
+# LLM_MODEL=doubao-seed-1-8-251228
+# LLM_MODEL_FAST=doubao-seed-1-6-flash-250828
 
-# 图像生成 API（通过火山引擎代理的 Gemini）
-IMAGE_API_KEY=your_image_api_key
-IMAGE_API_BASE=https://ark.cn-beijing.volcengineapi.com
+# 图片生成 API（火山引擎 Visual API，需要 Access Key + Secret Key）
+# 获取地址：https://console.volcengine.com/iam/keyman
+VOLC_ACCESS_KEY_ID=your_volc_access_key_id
+VOLC_SECRET_ACCESS_KEY=your_volc_secret_access_key
+# Visual API 地址，通常不需要修改
+IMAGE_API_BASE=https://visual.volcengineapi.com
 
 # LangSmith 可选（用于 AI 应用的可观测性和追踪）
 # LANGCHAIN_API_KEY=your_langsmith_api_key
@@ -147,15 +153,17 @@ IMAGE_API_BASE=https://ark.cn-beijing.volcengineapi.com
 
 ### 4. 初始化数据库
 
-运行数据库初始化脚本，创建 LangGraph Checkpointer 所需的表：
+LangGraph Checkpointer 在**首次启动应用时自动创建**所需的表（checkpoints、checkpoint_blobs、checkpoint_writes、checkpoint_migrations）。
+如果表结构需要重建，可以手动删除后重启应用，或通过 Python 脚本处理：
 
 ```bash
-# 方式 1：直接执行 SQL
-psql -U postgres -d graph_xiaohongshu -f scripts/init_db.sql
-
-# 方式 2：启动应用后自动创建（FastAPI lifespan 事件中处理）
-# 但 init_db.sql 会创建索引，首次启动前建议手动执行
+# 手动重建表：删除旧表后重启应用，LangGraph 会自动重建
+python -c "import psycopg; conn = psycopg.connect('postgresql://postgres:your_password@localhost:5432/graph_xiaohongshu', autocommit=True); cur = conn.cursor()
+for t in ['checkpoint_writes','checkpoint_blobs','checkpoints','checkpoint_migrations']: cur.execute(f'DROP TABLE IF EXISTS {t} CASCADE;')
+cur.close(); conn.close(); print('Done')"
 ```
+
+> 注意：`scripts/init_db.sql` 中的表结构为旧版 LangGraph 格式，新版 LangGraph（2.0+）由 `AsyncPostgresSaver.setup()` 自动管理表结构。
 
 ### 5. 启动服务
 
@@ -350,7 +358,7 @@ Authorization: Bearer <token>
                               │
               ┌───────────────┴───────────────┐
               │                               │
-         [approved]                      [rejected]
+         [review_approved]              [review_rejected]
               │                               │
               ▼                               │
 ┌─────────────────────────┐                   │
@@ -381,14 +389,13 @@ Authorization: Bearer <token>
 |------|------|----------|
 | `started` | 已启动 | 用户调用 /start |
 | `topics_generated` | 选题已生成 | plan_topics 节点完成 |
-| `topic_selected` | 选题已选择 | 用户调用 /resume 选择选题 |
+| `topic_selected` | 选题已选择 | topic_selection 子图完成 |
 | `article_writing` | 文章撰写中 | write_draft 节点执行中 |
-| `article_generated` | 文章已生成 | write_draft 节点完成 |
-| `under_review` | 审核中 | 进入 human_review_node |
+| `draft_generated` | 文章已生成 | write_draft 节点完成 |
+| `review_approved` | 审核通过 | 用户 approve |
+| `review_rejected` | 驳回重写 | 用户 reject |
 | `visuals_extracted` | 视觉要点已提取 | extract_visuals 节点完成 |
-| `images_generated` | 图片已生成 | generate_images 节点完成 |
 | `completed` | 完成 | 工作流正常结束 |
-| `rejected` | 驳回 | 用户驳回，等待重新生成 |
 
 ## 项目结构
 
@@ -479,8 +486,8 @@ graph_xiaohongshu/
    - 确保 VOLCENGINE_API_BASE 和 IMAGE_API_BASE 格式正确（无尾部斜杠）
 
 3. **状态持久化**：
-   - LangGraph Checkpointer 自动创建 checkpoints 和 checkpoint_writes 表
-   - 首次启动前建议手动执行 `scripts/init_db.sql` 创建索引
+   - LangGraph Checkpointer 自动创建 checkpoints、checkpoint_blobs、checkpoint_writes、checkpoint_migrations 表
+   - 如遇表结构不兼容（旧版格式），删除旧表后重启应用即可自动重建
 
 4. **前端开发**：
    - 前端默认运行在 http://localhost:5173

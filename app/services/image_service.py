@@ -1,63 +1,33 @@
 """
-图片生成服务模块
+Image Generation Service - Volcengine Seedream v3.0 (Synchronous CVProcess API)
 =============================================================================
-职责说明：
-  封装图片生成相关的功能，调用 Gemini Image API 生成小红书风格的配图。
-
-核心功能：
-  1. generate_single_image()：生成单张图片（带备用提示词重试）
-  2. generate_images()：批量生成配图（并行执行）
-
-典型场景：
-  工作流审核通过 -> extract_visuals_node（提取视觉要点）
-  -> generate_images_node -> image_service.generate_images(visual_points)
-  -> 返回图片 URL 列表 -> 保存到 static/images/generated/
-
-为什么用 Gemini？
-  Gemini 的 image generation 功能支持直接通过文本生成高质量图片
-  火山引擎 Doubao 提供了兼容 Gemini API 的端点
-
-图片规格：
-  - 比例：3:4 竖版（适合小红书手机浏览）
-  - 风格：小红书爆款风格（高质感、精致感、氛围感）
-  - 格式：PNG
+Uses CVProcess (synchronous) instead of async submit/poll.
+  - POST ?Action=CVProcess&Version=2022-08-31
+  - Returns result immediately (no polling needed)
+  - Auth: HMAC-SHA256 V4 via volcengine-python-sdk SignerV4
 =============================================================================
 """
 import os
-import asyncio
-import base64
+import json
 import uuid
 import random
 import httpx
+from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
-from datetime import datetime
 from dotenv import load_dotenv
 
 load_dotenv()
 
+try:
+    from volcenginesdkcore.signv4 import SignerV4
+except ImportError:
+    raise ImportError("volcengine-python-sdk not installed. Run: pip install volcengine-python-sdk")
+
 
 class ImageService:
-    """
-    图片生成服务类
+    """Image generation via Volcengine Seedream v3.0 (synchronous CVProcess)."""
 
-    ==========================================================================
-    核心方法：
-      - generate_single_image()：生成单张图片（带备用提示词重试）
-      - generate_images()：批量生成配图（并行执行）
-
-    Prompt 设计：
-      XHS_STYLE_PROMPT：包装后的完整提示词，加上小红书风格要求
-      FALLBACK_PROMPTS：备用提示词列表，首次失败时随机选择一个重试
-
-    错误处理：
-      - API 错误：打印日志，返回 None
-      - 网络超时：120 秒超时，返回 None
-      - 响应无图片：打印日志，返回 None
-    """
-
-    # 小红书风格提示词模板
-    # 会把用户提供的配图描述填入 {content} 占位符
     XHS_STYLE_PROMPT = """请根据以下内容生成一张小红书风格的爆款配图：
 
 【内容主题】
@@ -69,159 +39,87 @@ class ImageService:
 - 构图：简洁大气、留白得当、视觉重点突出
 - 比例：3:4 竖版构图（适合手机浏览）
 
-【风格参考】
-- 美食：诱人的食物特写，暖色调打光
-- 穿搭：时尚感穿搭展示，简约背景
-- 家居：温馨舒适的生活场景，ins风或日系风
-- 知识/干货：清新简约的图文排版，扁平插画
-- 其他：根据内容匹配最适合的小红书流行风格
-
 请生成一张高质量、有吸引力的图片。"""
 
-    # 备用提示词列表（首次生成失败时使用）
-    # 这些是通用的小红书风格提示词，不依赖具体内容
     FALLBACK_PROMPTS = [
         "小红书风格，明亮温暖的生活场景，咖啡和书本，柔和自然光，3:4竖版构图",
         "小红书风格，创意工作台，文具和绿植，ins风格，3:4竖版构图",
         "小红书风格，清新简约的扁平插画，渐变色背景，3:4竖版构图",
     ]
 
+    REQ_KEY = "high_aes_general_v20"  # Works with CVProcess
+
     def __init__(self):
-        """
-        初始化图片服务
+        self.access_key = os.getenv("VOLC_ACCESS_KEY_ID", "")
+        self.secret_key = os.getenv("VOLC_SECRET_ACCESS_KEY", "")
+        self.base_url = os.getenv("IMAGE_API_BASE", "https://visual.volcengineapi.com")
+        self.host = self.base_url.replace("https://", "").replace("http://", "")
 
-        环境变量配置：
-          IMAGE_API_KEY：Gemini API 密钥
-          IMAGE_BASE_URL：API 端点，默认为火山引擎的 Doubao 端点
-          IMAGE_MODEL：图片生成模型，默认为 gemini-3-pro-image-preview
-        """
-        self.api_key = os.getenv("IMAGE_API_KEY", "")
-        self.base_url = os.getenv("IMAGE_BASE_URL", "https://cn-beijing.yuannengai.com")
-        self.model = os.getenv("IMAGE_MODEL", "gemini-3-pro-image-preview")
-
-        # 创建图片存储目录
         self.image_dir = Path("static/images/generated")
         self.image_dir.mkdir(parents=True, exist_ok=True)
 
-        # 验证 API Key
-        if not self.api_key:
-            raise ValueError("IMAGE_API_KEY 未配置")
+        if not self.access_key or not self.secret_key:
+            raise ValueError(
+                "VOLC_ACCESS_KEY_ID and VOLC_SECRET_ACCESS_KEY must be configured. "
+                "Get them from: https://console.volcengine.com/iam/keyman"
+            )
 
-    def _build_api_url(self) -> str:
-        """
-        构建 Gemini API URL
+    def _sign(self, body: str) -> dict:
+        """Build HMAC-signed headers."""
+        headers = {"Content-Type": "application/json", "Host": self.host}
+        SignerV4.sign(
+            path="/",
+            method="POST",
+            headers=headers,
+            body=body,
+            post_params=None,
+            query={"Action": "CVProcess", "Version": "2022-08-31"},
+            ak=self.access_key,
+            sk=self.secret_key,
+            region="cn-north-1",
+            service="cv",
+        )
+        return headers
 
-        返回值：
-          完整的 API 端点 URL
-        """
-        return f"{self.base_url}/v1beta/models/{self.model}:generateContent"
+    async def _generate_sync(self, prompt: str) -> Optional[bytes]:
+        """Call CVProcess synchronously. Returns image bytes or None."""
+        body = json.dumps({
+            "req_key": self.REQ_KEY,
+            "prompt": prompt,
+            "width": 1024,
+            "height": 1360,
+            "return_url": True,
+        }, ensure_ascii=False)
 
-    def _save_image(self, image_base64: str, prefix: str = "xhs") -> str:
-        """
-        将 base64 图片数据解码并保存到本地文件
-
-        ==========================================================================
-        工作流程：
-          1. 生成文件名（时间戳 + UUID）
-          2. base64 解码为二进制数据
-          3. 写入 static/images/generated/ 目录
-          4. 返回访问路径
-
-        文件命名格式：
-          xhs_20240101_120000_abc123.png
-          前缀_年月日_时分秒_唯一ID.png
-
-        返回值：
-          HTTP 访问路径，如 /static/images/generated/xhs_xxx.png
-        """
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        unique_id = str(uuid.uuid4())[:8]
-        filename = f"{prefix}_{timestamp}_{unique_id}.png"
-
-        file_path = self.image_dir / filename
-
-        # base64 解码并写入文件
-        with open(file_path, "wb") as f:
-            f.write(base64.b64decode(image_base64))
-
-        # 返回 HTTP 访问路径（供前端 <img src="..."> 使用）
-        return f"/static/images/generated/{filename}"
-
-    async def _call_gemini_api(self, prompt: str) -> Optional[str]:
-        """
-        调用 Gemini 图片生成 API
-
-        ==========================================================================
-        工作流程：
-          1. 构造 HTTP 请求（POST JSON）
-          2. 发送请求（120 秒超时）
-          3. 解析响应，提取 base64 图片数据
-          4. 返回 base64 字符串
-
-        请求格式：
-          {
-            "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {"responseModalities": ["IMAGE", "TEXT"]}
-          }
-
-        响应格式：
-          {
-            "candidates": [{
-              "content": {
-                "parts": [{
-                  "inlineData": {"data": "...base64...", "mimeType": "image/png"}
-                }]
-              }
-            }]
-          }
-
-        返回值：
-          base64 编码的图片数据（如失败返回 None）
-
-        错误处理：
-          - HTTP 状态码错误：打印日志，返回 None
-          - 响应无图片数据：打印日志，返回 None
-          - 网络异常：打印日志，返回 None
-        """
-        url = self._build_api_url()
-
-        # 请求体
-        payload = {
-            "contents": [{"parts": [{"text": prompt}]}],
-            # 要求返回 IMAGE 和 TEXT 两种模态
-            "generationConfig": {"responseModalities": ["IMAGE", "TEXT"]}
-        }
-
-        # 请求头
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.api_key}"
-        }
+        headers = self._sign(body)
+        url = f"{self.base_url}/?Action=CVProcess&Version=2022-08-31"
 
         try:
-            # httpx：现代异步 HTTP 客户端（比 requests 更适合异步代码）
-            async with httpx.AsyncClient(timeout=120.0) as client:
-                response = await client.post(url, json=payload, headers=headers)
-                response.raise_for_status()  # HTTP 错误码抛异常
-                result = response.json()
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                resp = await client.post(url, content=body.encode("utf-8"), headers=headers)
+                data = resp.json()
 
-                # 从响应中提取 base64 图片数据
-                if "candidates" in result and result["candidates"]:
-                    for part in result["candidates"][0]["content"]["parts"]:
-                        if "inlineData" in part:
-                            return part["inlineData"]["data"]
+                if data.get("code") == 10000:
+                    image_urls = data.get("data", {}).get("image_urls", [])
+                    if image_urls:
+                        print(f"[ImageService] CVProcess success, URL: {image_urls[0][:60]}...")
+                        # Download image
+                        async with httpx.AsyncClient(timeout=60.0) as c2:
+                            img_resp = await c2.get(image_urls[0])
+                            img_resp.raise_for_status()
+                            return img_resp.content
+                    else:
+                        binary_data = data.get("data", {}).get("binary_data_base64", [])
+                        if binary_data:
+                            import base64
+                            return base64.b64decode(binary_data[0])
 
-                # 响应中没有图片数据
-                print(f"[ImageService] API 响应中未找到图片数据")
+                err = data.get("message", str(data))
+                self._log(f"[ImageService] CVProcess failed: {err[:200]}")
                 return None
 
-        except httpx.HTTPStatusError as e:
-            # HTTP 状态码错误（如 401 未授权、429 请求过多）
-            print(f"[ImageService] HTTP 错误: {e.response.status_code}")
-            return None
         except Exception as e:
-            # 其他异常（网络超时、JSON 解析错误等）
-            print(f"[ImageService] 请求异常: {e}")
+            self._log(f"[ImageService] Exception: {type(e).__name__}: {e}")
             return None
 
     async def generate_single_image(
@@ -229,112 +127,70 @@ class ImageService:
         prompt: str,
         optimize_for_xhs: bool = True,
     ) -> Optional[str]:
-        """
-        生成单张图片（失败时使用备用提示词重试一次）
-
-        ==========================================================================
-        工作流程：
-          1. 如果开启了小红书风格优化，包装提示词
-          2. 首次调用 Gemini API
-          3. 如果失败，用备用提示词重试
-          4. 返回访问路径
-
-        为什么需要备用提示词？
-          Gemini API 可能因为网络、限流等原因失败
-          备用提示词是通用风格，不依赖具体内容
-          可以确保至少有图片返回
-
-        参数详解：
-          - prompt：配图描述（如 "温暖的学习场景，程序员深夜编程"）
-          - optimize_for_xhs：是否包装成小红书风格模板
-            True：套用 XHS_STYLE_PROMPT 模板
-            False：直接用 prompt 作为生成提示词
-
-        返回值：
-          图片访问路径（如 "/static/images/generated/xhs_xxx.png"）
-          失败返回 None
-        """
-        # ---------- 第 1 步：包装提示词 ----------
+        """Generate one image. Returns access path or None."""
         if optimize_for_xhs:
-            current_prompt = self.XHS_STYLE_PROMPT.format(content=prompt)
-        else:
-            current_prompt = prompt
+            prompt = self.XHS_STYLE_PROMPT.format(content=prompt)
+        print(f"[ImageService] Generating: {prompt[:50]}...")
 
-        print(f"[ImageService] 生成图片: {prompt[:50]}...")
+        image_data = await self._generate_sync(prompt)
+        if not image_data:
+            print("[ImageService] Trying fallback prompt...")
+            image_data = await self._generate_sync(random.choice(self.FALLBACK_PROMPTS))
 
-        # ---------- 第 2 步：首次尝试 ----------
-        image_base64 = await self._call_gemini_api(current_prompt)
-        if image_base64:
-            image_path = self._save_image(image_base64)
-            print(f"[ImageService] 图片生成成功: {image_path}")
-            return image_path
+        if not image_data:
+            return None
 
-        # ---------- 第 3 步：备用提示词重试 ----------
-        print(f"[ImageService] 首次失败，使用备用提示词重试...")
-        await asyncio.sleep(1)  # 等待 1 秒，避免频繁请求
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        unique_id = str(uuid.uuid4())[:8]
+        filename = f"xhs_{timestamp}_{unique_id}.png"
+        file_path = self.image_dir / filename
 
-        fallback_prompt = random.choice(self.FALLBACK_PROMPTS)
-        image_base64 = await self._call_gemini_api(fallback_prompt)
-        if image_base64:
-            image_path = self._save_image(image_base64)
-            print(f"[ImageService] 备用提示词成功: {image_path}")
-            return image_path
+        with open(file_path, "wb") as f:
+            f.write(image_data)
 
-        # ---------- 第 4 步：全部失败 ----------
-        print(f"[ImageService] 图片生成失败，跳过")
-        return None
+        path = f"/static/images/generated/{filename}"
+        print(f"[ImageService] Saved: {path} ({len(image_data)/1024:.1f} KB)")
+        return path
 
     async def generate_images(
         self,
         visual_points: List[str],
         optimize_for_xhs: bool = True,
     ) -> List[str]:
-        """
-        批量生成配图（并行执行）
-
-        ==========================================================================
-        工作流程：
-          1. 为每个配图要点创建 generate_single_image 任务
-          2. asyncio.gather() 并行执行所有任务
-          3. 过滤掉 None（失败的图片）
-          4. 返回成功的图片路径列表
-
-        为什么并行？
-          每个配图生成是独立的 API 调用
-          串行：3 张图片需要 3 x 10s = 30s
-          并行：3 张图片只需要 ~10s（取决于最慢的那个）
-
-        参数详解：
-          - visual_points：配图描述列表（如 ["场景1", "场景2", "场景3"]）
-          - optimize_for_xhs：是否开启小红书风格优化
-
-        返回值：
-          成功的图片 URL 列表（如 ["/static/...", "/static/..."]）
-          失败的不包含在内
-        """
+        """Batch generate images in parallel."""
         if not visual_points:
             return []
 
-        # ---------- 第 1 步：创建所有任务 ----------
+        import asyncio
         tasks = [
-            self.generate_single_image(prompt=point, optimize_for_xhs=optimize_for_xhs)
+            self.generate_single_image(point, optimize_for_xhs)
             for point in visual_points
         ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        # ---------- 第 2 步：并行执行 ----------
-        results = await asyncio.gather(*tasks)
+        image_paths = []
+        for r in results:
+            if isinstance(r, str):
+                image_paths.append(r)
+            elif isinstance(r, Exception):
+                print(f"[ImageService] Exception: {type(r).__name__}")
 
-        # ---------- 第 3 步：过滤成功的结果 ----------
-        # gather 返回的结果包含 None（失败的），过滤掉
-        image_paths = [path for path in results if path is not None]
-
-        print(f"[ImageService] 成功生成 {len(image_paths)}/{len(visual_points)} 张图片")
+        print(f"[ImageService] Generated {len(image_paths)}/{len(visual_points)} images")
         return image_paths
 
+    def _log(self, msg: str):
+        """Log to file (avoid GBK encoding issues on Windows)."""
+        try:
+            p = Path("logs/image_service.log")
+            p.parent.mkdir(exist_ok=True)
+            with open(p, "a", encoding="utf-8") as f:
+                f.write(f"[{datetime.now()}] {msg}\n")
+        except Exception:
+            pass
+
 
 # =============================================================================
-# 单例实例
+# Singleton
 # =============================================================================
 
-# 全局单例，整个项目复用同一个 ImageService 实例
 image_service = ImageService()

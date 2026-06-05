@@ -234,7 +234,7 @@ class LLMService:
         self.model = os.getenv("LLM_MODEL", "doubao-seed-1-8-251228")
         self.model_fast = os.getenv("LLM_MODEL_FAST", "doubao-seed-1-6-flash-250828")
         self.temperature = float(os.getenv("LLM_TEMPERATURE", "0.7"))
-        self.temperature_fast = float(os.getenv("LLM_MODEL_FAST", "0.7"))
+        self.temperature_fast = float(os.getenv("LLM_TEMPERATURE_FAST", "0.7"))
         self.temperature_extract = float(os.getenv("LLM_TEMPERATURE_EXTRACT", "0.4"))
 
         self.enable_pii_anonymize = enable_pii_anonymize
