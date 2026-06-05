@@ -74,7 +74,12 @@
 
 ```bash
 # Windows - 确认 PostgreSQL 服务运行
-# 可以在服务管理器中查看 postgresql 服务状态
+# 方式1：命令行检查服务状态
+Get-Service | Where-Object { $_.Name -like "*postgres*" }
+# 方式2：检查具体服务（如 postgresql-x64-16，版本号可能不同）
+sc query postgresql-x64-16
+# 方式3：直接测试连接，能返回版本号说明服务正常
+psql -U postgres -c "SELECT version();"
 
 # macOS - 使用 Homebrew 启动
 brew services start postgresql@15
