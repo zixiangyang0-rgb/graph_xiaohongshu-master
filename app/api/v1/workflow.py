@@ -373,17 +373,26 @@ async def start_workflow(
         # ---------- 第 5 步：执行工作流（直到第一个中断点） ----------
         # ainvoke() 是异步版本
         # LangGraph 1.0+ 在遇到 interrupt() 时自动暂停
-        # 返回暂停时的状态（不包含 interrupt 后的数据）
-        result = await graph.ainvoke(initial_input, config)
+        await graph.ainvoke(initial_input, config)
 
         # ---------- 第 6 步：获取状态快照（包含中断信息） ----------
         state_snapshot = await graph.aget_state(config)
-        interrupt_info = extract_interrupt_info(state_snapshot)
+        if state_snapshot is None or state_snapshot.values is None:
+            raise RuntimeError("工作流已启动，但未能读取到状态快照")
 
-        # ---------- 第 7 步：提取结果 ----------
-        generated_topics = result.get("generated_topics", [])
-        current_status = result.get("status", "unknown")
-        node_metrics = result.get("node_metrics", [])
+        interrupt_info = extract_interrupt_info(state_snapshot)
+        state_values = dict(state_snapshot.values)
+
+        # ---------- 第 7 步：从持久化状态中提取结果 ----------
+        # 对于包含子图 + interrupt 的流程，真实状态以快照为准
+        generated_topics = state_values.get("generated_topics", [])
+        current_status = state_values.get("status", "unknown")
+        node_metrics = state_values.get("node_metrics", [])
+        error_message = state_values.get("error", "")
+
+        if not generated_topics:
+            detail = error_message or "工作流未生成任何候选选题，请检查 LLM 配置后重试"
+            raise RuntimeError(detail)
 
         # 记录阶段变化日志
         app_logger.workflow_stage_changed(

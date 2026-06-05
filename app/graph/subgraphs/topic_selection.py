@@ -65,6 +65,15 @@ async def human_select_topic_node(state: AgentState) -> Command[Literal["__end__
     """
     generated_topics = state.get("generated_topics", [])
 
+    if not generated_topics:
+        return Command(
+            update={
+                "status": "error",
+                "error": "未生成任何可选选题，请检查 LLM 配置或稍后重试",
+            },
+            goto=END
+        )
+
     # ---------- 中断：等待用户选择 ----------
     user_input = interrupt({
         "message": "请从以下选题中选择一个",

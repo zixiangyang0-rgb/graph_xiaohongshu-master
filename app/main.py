@@ -212,6 +212,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 app = FastAPI(
     # API 文档标题（浏览器 tab 显示）
     title=settings.app_name,
+    swagger_ui_parameters={"persistAuthorization": True},
     # API 描述（文档页面顶部）
     description="""
 ## AI 内容运营助手 API

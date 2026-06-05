@@ -40,7 +40,7 @@ from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessageChunk
 
 # Pydantic 数据验证
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 load_dotenv()
 
@@ -315,6 +315,27 @@ class LLMService:
             self._llm_extract = self._create_llm(self.model_fast, self.temperature_extract)
         return self._llm_extract
 
+    def _get_topic_llm_candidates(self) -> List[tuple[ChatOpenAI, str]]:
+        """
+        获取选题生成可用的模型候选列表
+
+        工作原理：
+          选题统一只使用标准模型，避免未开通的快速模型导致启动流程失败。
+        """
+        return [(self.llm, self.model)]
+
+    def _get_extract_llm_candidates(self) -> List[tuple[ChatOpenAI, str]]:
+        """
+        获取提取任务可用的模型候选列表
+
+        工作原理：
+          优先使用低温度快速模型；如果快速模型不可用，则降级到标准模型低温度实例。
+        """
+        candidates: List[tuple[ChatOpenAI, str]] = [(self.llm_extract, self.model_fast)]
+        if self.model != self.model_fast:
+            candidates.append((self._create_llm(self.model, self.temperature_extract), self.model))
+        return candidates
+
     # ---------- 内部方法 ----------
 
     def _extract_usage_info(self, response, model: str = "") -> LLMUsageInfo:
@@ -375,6 +396,53 @@ class LLMService:
 
     # ---------- 核心方法 ----------
 
+    def _parse_topics_from_text(self, content: str) -> TopicsResponse:
+        """
+        从非结构化文本中尽可能恢复选题列表
+
+        工作原理：
+          先尝试提取 JSON；如果没有可靠 JSON，则按行提取标题，兼容编号、项目符号、引号等常见格式。
+        """
+        import json
+
+        text = (content or "").strip()
+        if not text:
+            return TopicsResponse(topics=[])
+
+        if "```" in text:
+            text = re.sub(r'^.*?```(?:json)?\s*', '', text, flags=re.DOTALL)
+            text = re.sub(r'\s*```.*$', '', text, flags=re.DOTALL)
+
+        json_start = text.find('{')
+        json_end = text.rfind('}')
+        if json_start != -1 and json_end != -1 and json_end > json_start:
+            try:
+                data = json.loads(text[json_start:json_end + 1])
+                return TopicsResponse(**data)
+            except (json.JSONDecodeError, ValidationError, TypeError):
+                pass
+
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        topics: List[TopicItem] = []
+
+        for line in lines:
+            cleaned = re.sub(r'^[-*•]\s*', '', line)
+            cleaned = re.sub(r'^\d+[\.)、]\s*', '', cleaned)
+            cleaned = cleaned.strip('"“”\' ')
+
+            if not cleaned:
+                continue
+            if cleaned.startswith('{') or cleaned.startswith('['):
+                continue
+            if 'title' in cleaned.lower() and len(cleaned) < 12:
+                continue
+
+            topics.append(TopicItem(title=cleaned))
+            if len(topics) >= 5:
+                break
+
+        return TopicsResponse(topics=topics)
+
     async def plan_topics(self, topic_direction: str) -> Tuple[TopicsResponse, LLMUsageInfo]:
         """
         根据主题方向生成候选选题（结构化输出）
@@ -382,10 +450,8 @@ class LLMService:
         ==========================================================================
         工作流程：
           1. 构建消息列表（SystemMessage + HumanMessage）
-          2. 使用 with_structured_output() 启用结构化输出
-          3. 调用 LLM，返回 Pydantic 模型
-          4. 提取 token 使用信息
-          5. 如果结构化输出失败，fallback 到手动解析 JSON
+          2. 使用标准模型做结构化输出
+          3. 如果结构化输出失败，再 fallback 到手动解析 JSON
 
         为什么用结构化输出？
           传统方式：LLM 输出纯文本 -> 手动正则解析 JSON
@@ -410,27 +476,42 @@ class LLMService:
             HumanMessage(content=f"主题：{topic_direction or '技术分享'}")
         ]
 
-        usage = LLMUsageInfo(model=self.model_fast)
+        last_error: Exception | None = None
 
-        try:
-            # 使用结构化输出方法
-            # with_structured_output() 让 LLM 直接输出正确格式的 JSON
-            structured_llm = self.llm_fast.with_structured_output(TopicsResponse, include_raw=True)
-            result = await structured_llm.ainvoke(messages)
+        for llm_client, model_name in self._get_topic_llm_candidates():
+            usage = LLMUsageInfo(model=model_name)
+            try:
+                structured_llm = llm_client.with_structured_output(TopicsResponse, include_raw=True)
+                result = await structured_llm.ainvoke(messages)
 
-            raw_response = result.get('raw')
-            parsed_response = result.get('parsed')
+                raw_response = result.get('raw')
+                parsed_response = result.get('parsed')
 
-            # 从原始响应中提取 usage 信息
-            if raw_response:
-                usage = self._extract_usage_info(raw_response, self.model_fast)
+                if raw_response:
+                    usage = self._extract_usage_info(raw_response, model_name)
 
-        except Exception as e:
-            # 结构化输出失败，fallback 到手动解析
-            print(f"[LLM] 结构化输出失败，使用备用方案: {e}")
-            return await self._plan_topics_fallback(topic_direction)
+                if parsed_response:
+                    return parsed_response, usage
 
-        return parsed_response or TopicsResponse(topics=[]), usage
+                raw_content = getattr(raw_response, "content", "") if raw_response else ""
+                recovered_response = self._parse_topics_from_text(raw_content)
+                if recovered_response.topics:
+                    print(f"[LLM] 模型 {model_name} 结构化结果为空，已从原始文本恢复 {len(recovered_response.topics)} 个选题")
+                    return recovered_response, usage
+
+                print(f"[LLM] 模型 {model_name} 结构化结果为空，转入普通文本兜底")
+                fallback_response, fallback_usage = await self._plan_topics_fallback(topic_direction)
+                if fallback_response.topics:
+                    return fallback_response, fallback_usage
+
+                return TopicsResponse(topics=[]), fallback_usage
+
+            except Exception as e:
+                last_error = e
+                print(f"[LLM] 模型 {model_name} 结构化输出失败，尝试降级: {e}")
+
+        print(f"[LLM] 所有结构化模型都失败，使用备用方案: {last_error}")
+        return await self._plan_topics_fallback(topic_direction)
 
     async def _plan_topics_fallback(self, topic_direction: str) -> Tuple[TopicsResponse, LLMUsageInfo]:
         """
@@ -438,14 +519,12 @@ class LLMService:
 
         工作流程：
           1. 提示词末尾加上 JSON 格式要求
-          2. 普通调用 LLM
-          3. 从响应中提取 JSON（去掉 markdown 代码块）
-          4. json.loads() 解析
-          5. 返回 TopicsResponse
+          2. 使用标准模型普通调用
+          3. 尝试从文本中恢复选题列表
+          4. 返回 TopicsResponse
         """
         import json
 
-        # 修改提示词，要求 JSON 格式输出
         system_prompt = self.TOPIC_SYSTEM_PROMPT + '\n\nJSON格式输出：{"topics":[{"title":"标题1"},...,{"title":"标题5"}]}'
 
         messages = [
@@ -453,28 +532,22 @@ class LLMService:
             HumanMessage(content=f"主题：{topic_direction or '技术分享'}")
         ]
 
-        response = await self.llm_fast.ainvoke(messages)
-        usage = self._extract_usage_info(response, self.model_fast)
+        last_error: Exception | None = None
 
-        try:
-            content = response.content.strip()
+        for llm_client, model_name in self._get_topic_llm_candidates():
+            try:
+                response = await llm_client.ainvoke(messages)
+                usage = self._extract_usage_info(response, model_name)
+                parsed = self._parse_topics_from_text(response.content)
+                if parsed.topics:
+                    return parsed, usage
+                print(f"[LLM] 模型 {model_name} 返回成功，但未解析出有效选题")
+            except Exception as e:
+                last_error = e
+                print(f"[LLM] 模型 {model_name} JSON 解析方案失败，尝试降级: {e}")
 
-            # 去掉 markdown 代码块
-            if "```" in content:
-                content = re.sub(r'^.*?```(?:json)?\s*', '', content, flags=re.DOTALL)
-                content = re.sub(r'\s*```.*$', '', content, flags=re.DOTALL)
-
-            # 提取 JSON 对象
-            json_start = content.find('{')
-            json_end = content.rfind('}')
-            if json_start != -1 and json_end != -1:
-                content = content[json_start:json_end + 1]
-
-            data = json.loads(content)
-            return TopicsResponse(**data), usage
-        except Exception as e:
-            print(f"[LLM] JSON 解析失败: {e}")
-            return TopicsResponse(topics=[]), usage
+        print(f"[LLM] 所有选题模型都失败: {last_error}")
+        return TopicsResponse(topics=[]), LLMUsageInfo(model=self.model)
 
     async def write_draft(
         self,

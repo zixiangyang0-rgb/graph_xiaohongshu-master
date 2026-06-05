@@ -20,6 +20,13 @@ LangGraph 工具函数模块
   3. 服务关闭 -> close_checkpointer() -> 关闭连接池
 =============================================================================
 """
+import asyncio
+import selectors
+import platform
+
+if platform.system() == "Windows":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 import psycopg
 from typing import Union
 
