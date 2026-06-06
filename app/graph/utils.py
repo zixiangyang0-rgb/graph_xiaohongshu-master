@@ -1,8 +1,7 @@
 """
 LangGraph 工具函数模块
 =============================================================================
-职责说明：
-  提供 LangGraph 工作流运行所需的工具函数，其中最重要的是 Checkpointer 的管理。
+提供 LangGraph 工作流运行所需的工具函数，其中最重要的是 Checkpointer 的管理。
 
 核心概念：
   - Checkpointer：状态持久化器，把工作流状态保存到数据库
@@ -14,7 +13,7 @@ LangGraph 工具函数模块
   Checkpointer 把状态保存到数据库，下次可以无缝继续
   没有 Checkpointer，每次中断都要从头开始
 
-典型场景：
+日常场景：
   1. 服务启动 -> setup_checkpointer() -> 初始化连接池，创建表
   2. 用户执行工作流 -> graph.ainvoke() -> 状态自动持久化
   3. 服务关闭 -> close_checkpointer() -> 关闭连接池
@@ -57,7 +56,7 @@ async def setup_checkpointer() -> BaseCheckpointSaver:
     设置并初始化 Checkpointer（PostgreSQL 持久化）
 
     ==========================================================================
-    工作流程（每一步都有明确目的）：
+    工作流程：
 
     ---------- 第 1 步：检查是否已初始化 ----------
     如果 _checkpointer 已有值，说明之前已经初始化过了，直接返回

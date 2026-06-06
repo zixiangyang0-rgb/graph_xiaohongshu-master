@@ -1,33 +1,38 @@
 """
-Image Generation Service - Volcengine Seedream v3.0 (Synchronous CVProcess API)
-=============================================================================
-Uses CVProcess (synchronous) instead of async submit/poll.
-  - POST ?Action=CVProcess&Version=2022-08-31
-  - Returns result immediately (no polling needed)
-  - Auth: HMAC-SHA256 V4 via volcengine-python-sdk SignerV4
-=============================================================================
+图片生成服务。
+
+拿到文案或视觉描述后，这里会去调用方舟的画图接口，
+把结果落到本地，再把可访问的图片路径返回出去。
 """
+import warnings
 import os
-import json
 import uuid
-import random
+import asyncio
 import httpx
+import base64
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 from dotenv import load_dotenv
 
-load_dotenv()
+warnings.filterwarnings("ignore", message="Unverified HTTPS request")
 
-try:
-    from volcenginesdkcore.signv4 import SignerV4
-except ImportError:
-    raise ImportError("volcengine-python-sdk not installed. Run: pip install volcengine-python-sdk")
+
+class ImageGenerationError(RuntimeError):
+    """图片生成失败"""
+
+
+load_dotenv()
 
 
 class ImageService:
-    """Image generation via Volcengine Seedream v3.0 (synchronous CVProcess)."""
+    """
+    通过火山引擎方舟 Ark 平台生成图片
 
+    图片会保存到 static/images/generated/ 目录。
+    """
+
+    # 小红书风格 prompt 模板
     XHS_STYLE_PROMPT = """请根据以下内容生成一张小红书风格的爆款配图：
 
 【内容主题】
@@ -41,85 +46,81 @@ class ImageService:
 
 请生成一张高质量、有吸引力的图片。"""
 
+    # 备用 prompt（生成失败时降级用）
     FALLBACK_PROMPTS = [
         "小红书风格，明亮温暖的生活场景，咖啡和书本，柔和自然光，3:4竖版构图",
         "小红书风格，创意工作台，文具和绿植，ins风格，3:4竖版构图",
         "小红书风格，清新简约的扁平插画，渐变色背景，3:4竖版构图",
     ]
 
-    REQ_KEY = "high_aes_general_v20"  # Works with CVProcess
+    DEFAULT_MODEL = "doubao-seedream-4-0-250828"
 
     def __init__(self):
-        self.access_key = os.getenv("VOLC_ACCESS_KEY_ID", "")
-        self.secret_key = os.getenv("VOLC_SECRET_ACCESS_KEY", "")
-        self.base_url = os.getenv("IMAGE_API_BASE", "https://visual.volcengineapi.com")
-        self.host = self.base_url.replace("https://", "").replace("http://", "")
+        self.api_key = os.getenv("LLM_API_KEY", "")
+        self.base_url = os.getenv("ARK_BASE_URL", "https://ark.cn-beijing.volces.com/api/v3")
+        self.model = self.DEFAULT_MODEL
 
         self.image_dir = Path("static/images/generated")
         self.image_dir.mkdir(parents=True, exist_ok=True)
 
-        if not self.access_key or not self.secret_key:
+        if not self.api_key:
             raise ValueError(
-                "VOLC_ACCESS_KEY_ID and VOLC_SECRET_ACCESS_KEY must be configured. "
-                "Get them from: https://console.volcengine.com/iam/keyman"
+                "LLM_API_KEY 未配置。请确保 .env 中有 LLM_API_KEY（方舟 Ark 平台的 API Key）。"
             )
 
-    def _sign(self, body: str) -> dict:
-        """Build HMAC-signed headers."""
-        headers = {"Content-Type": "application/json", "Host": self.host}
-        SignerV4.sign(
-            path="/",
-            method="POST",
-            headers=headers,
-            body=body,
-            post_params=None,
-            query={"Action": "CVProcess", "Version": "2022-08-31"},
-            ak=self.access_key,
-            sk=self.secret_key,
-            region="cn-north-1",
-            service="cv",
-        )
-        return headers
+    def _headers(self) -> dict:
+        return {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}",
+        }
 
-    async def _generate_sync(self, prompt: str) -> Optional[bytes]:
-        """Call CVProcess synchronously. Returns image bytes or None."""
-        body = json.dumps({
-            "req_key": self.REQ_KEY,
+    async def _generate_one(self, prompt: str) -> Optional[bytes]:
+        """
+        调方舟 API 生成一张图片，返回图片二进制数据或 None
+        """
+        url = f"{self.base_url}/images/generations"
+        payload = {
+            "model": self.model,
             "prompt": prompt,
-            "width": 1024,
-            "height": 1360,
-            "return_url": True,
-        }, ensure_ascii=False)
-
-        headers = self._sign(body)
-        url = f"{self.base_url}/?Action=CVProcess&Version=2022-08-31"
+            "size": "2K",
+            "response_format": "b64_json",
+            "watermark": False,
+        }
 
         try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                resp = await client.post(url, content=body.encode("utf-8"), headers=headers)
+            async with httpx.AsyncClient(timeout=120.0, verify=False) as client:
+                resp = await client.post(url, json=payload, headers=self._headers())
                 data = resp.json()
 
-                if data.get("code") == 10000:
-                    image_urls = data.get("data", {}).get("image_urls", [])
-                    if image_urls:
-                        print(f"[ImageService] CVProcess success, URL: {image_urls[0][:60]}...")
-                        # Download image
-                        async with httpx.AsyncClient(timeout=60.0) as c2:
-                            img_resp = await c2.get(image_urls[0])
-                            img_resp.raise_for_status()
-                            return img_resp.content
-                    else:
-                        binary_data = data.get("data", {}).get("binary_data_base64", [])
-                        if binary_data:
-                            import base64
-                            return base64.b64decode(binary_data[0])
-
-                err = data.get("message", str(data))
-                self._log(f"[ImageService] CVProcess failed: {err[:200]}")
+            if resp.status_code != 200:
+                self._log(f"[ImageService] HTTP {resp.status_code}: {data}")
                 return None
 
+            image_data = data.get("data", [])
+            if not image_data:
+                self._log(f"[ImageService] 返回数据为空: {data}")
+                return None
+
+            b64_img = image_data[0].get("b64_json", "")
+            if b64_img:
+                return base64.b64decode(b64_img)
+
+            # 如果返回的是 URL 而不是 base64，就下载
+            url_img = image_data[0].get("url", "")
+            if url_img:
+                async with httpx.AsyncClient(timeout=60.0, verify=False) as c2:
+                    img_resp = await c2.get(url_img)
+                    img_resp.raise_for_status()
+                    return img_resp.content
+
+            self._log(f"[ImageService] 两种格式都没有: {data}")
+            return None
+
+        except httpx.TimeoutException:
+            self._log("[ImageService] 请求超时")
+            return None
         except Exception as e:
-            self._log(f"[ImageService] Exception: {type(e).__name__}: {e}")
+            self._log(f"[ImageService] 生成失败: {e}")
             return None
 
     async def generate_single_image(
@@ -127,19 +128,27 @@ class ImageService:
         prompt: str,
         optimize_for_xhs: bool = True,
     ) -> Optional[str]:
-        """Generate one image. Returns access path or None."""
+        """
+        生成一张图片，返回保存后的访问路径或 None
+        """
         if optimize_for_xhs:
             prompt = self.XHS_STYLE_PROMPT.format(content=prompt)
-        print(f"[ImageService] Generating: {prompt[:50]}...")
 
-        image_data = await self._generate_sync(prompt)
+        print(f"[ImageService] 生成图片: {prompt[:50]}...")
+
+        image_data = await self._generate_one(prompt)
+
+        # 主 prompt 失败，用备用 prompt 降级
         if not image_data:
-            print("[ImageService] Trying fallback prompt...")
-            image_data = await self._generate_sync(random.choice(self.FALLBACK_PROMPTS))
+            print("[ImageService] 主 prompt 失败，尝试备用 prompt...")
+            image_data = await self._generate_one(
+                FALLBACK_PROMPTS[uuid.uuid4().int % len(self.FALLBACK_PROMPTS)]
+            )
 
         if not image_data:
             return None
 
+        # 保存到本地
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         unique_id = str(uuid.uuid4())[:8]
         filename = f"xhs_{timestamp}_{unique_id}.png"
@@ -149,7 +158,7 @@ class ImageService:
             f.write(image_data)
 
         path = f"/static/images/generated/{filename}"
-        print(f"[ImageService] Saved: {path} ({len(image_data)/1024:.1f} KB)")
+        print(f"[ImageService] 保存成功: {path} ({len(image_data) / 1024:.1f} KB)")
         return path
 
     async def generate_images(
@@ -157,29 +166,29 @@ class ImageService:
         visual_points: List[str],
         optimize_for_xhs: bool = True,
     ) -> List[str]:
-        """Batch generate images in parallel."""
+        """并行生成多张配图"""
         if not visual_points:
             return []
 
-        import asyncio
         tasks = [
             self.generate_single_image(point, optimize_for_xhs)
             for point in visual_points
         ]
+
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         image_paths = []
         for r in results:
-            if isinstance(r, str):
+            if isinstance(r, str) and r:
                 image_paths.append(r)
             elif isinstance(r, Exception):
-                print(f"[ImageService] Exception: {type(r).__name__}")
+                print(f"[ImageService] 异常: {type(r).__name__}: {r}")
 
-        print(f"[ImageService] Generated {len(image_paths)}/{len(visual_points)} images")
+        print(f"[ImageService] 生成结果: {len(image_paths)}/{len(visual_points)} 张成功")
         return image_paths
 
     def _log(self, msg: str):
-        """Log to file (avoid GBK encoding issues on Windows)."""
+        """写入日志文件"""
         try:
             p = Path("logs/image_service.log")
             p.parent.mkdir(exist_ok=True)
@@ -188,9 +197,5 @@ class ImageService:
         except Exception:
             pass
 
-
-# =============================================================================
-# Singleton
-# =============================================================================
 
 image_service = ImageService()

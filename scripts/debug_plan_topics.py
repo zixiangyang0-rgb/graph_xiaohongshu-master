@@ -1,3 +1,13 @@
+"""
+选题规划调试脚本 - 测试 LLM 服务的选题生成功能
+
+用途：
+  直接运行这个脚本，不需要启动整个 FastAPI 服务，
+  就能测试 LLM 选题生成是否正常工作。
+
+用法：
+  cd /path/to/project && python scripts/debug_plan_topics.py
+"""
 import asyncio
 import json
 from pathlib import Path

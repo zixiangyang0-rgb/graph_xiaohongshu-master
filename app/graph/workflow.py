@@ -1,40 +1,20 @@
 """
-LangGraph 工作流定义模块
-=============================================================================
-职责说明：
-  组装完整的 AI 内容运营工作流，定义所有节点和它们之间的流转关系。
+工作流定义模块 - 把所有"节点"串成一个完整的 AI 工作流
+
+通俗理解：
+  这个文件就是"包工头"，负责把所有小工位（节点）按顺序串起来。
 
 核心概念：
   - StateGraph：LangGraph 的核心类，代表一个有向图
-  - Node（节点）：工作流中的一个处理步骤（Python 函数）
+  - Node（节点）：工作流中的一个处理步骤
   - Edge（边）：节点之间的连接，代表执行顺序
-  - Subgraph（子图）：把一组节点封装成子工作流
-  - interrupt()：LangGraph 1.0+ 的人工中断机制
-  - Command：LangGraph 1.0+ 的恢复指令
+  - interrupt()：暂停工作流，等人工输入后再继续
+  - Command：恢复中断的工作流
 
 工作流完整路径：
-  Start
-    -> topic_selection [子图]
-        -> plan_topics（AI 生成选题）
-        -> interrupt（等待用户选择）
-    -> write_draft（AI 生成文章）
-    -> human_review（人工审核）
-        -> approve: extract_visuals -> generate_images -> End
-        -> reject: 回到 write_draft
-
-为什么用 interrupt？
-  AI 内容生成需要人工把关（选题选择、文章审核）
-  interrupt() 让 AI 执行到关键节点时暂停，等待人工输入后再继续
-
-典型场景：
-  1. graph.ainvoke(initial_input, config) 开始执行
-  2. 走到 topic_selection 子图，plan_topics 生成选题
-  3. 遇到 interrupt，暂停并返回选题列表
-  4. 用户调用 graph.ainvoke(Command(resume={"selected_topic": "xxx"}), config) 恢复
-  5. 工作流继续执行 write_draft（生成文章）
-  6. 遇到 human_review 的 interrupt，暂停并返回文章
-  7. 用户 approve -> 继续 extract_visuals + generate_images -> 完成
-=============================================================================
+  Start -> topic_selection（AI 生成选题 + 等你选） -> write_draft（写文章）
+  -> human_review（等你审核） -> 审核通过？ -> extract_visuals -> generate_images -> 完成
+  -> 审核驳回？ -> 回到 write_draft 重写
 """
 from typing import Literal
 from langgraph.graph import StateGraph, START, END
@@ -51,48 +31,33 @@ from app.graph.subgraphs.topic_selection import get_compiled_topic_selection_sub
 
 
 # =============================================================================
-# 第 1 步：人工审稿节点
+# 人工审稿节点
 # =============================================================================
 
 async def human_review_node(state: AgentState) -> Command[Literal["extract_visuals", "write_draft"]]:
     """
-    人工审稿节点（使用 LangGraph 1.0+ interrupt 模式）
+    人工审稿节点（等用户点"通过"或"驳回"）
 
-    ==========================================================================
     工作流程：
       1. 读取 state 中的 article_content（AI 生成的文章草稿）
-      2. 调用 interrupt() 暂停工作流，等待人工审核
+      2. 调用 interrupt() 暂停工作流，等人工审核
       3. 用户通过 API 传入审核结果（approve 或 reject）
-      4. 根据用户选择，返回不同的路由指令
+      4. 根据用户选择，决定下一步是"生成配图"还是"重写文章"
 
-    interrupt() 机制说明：
-      interrupt() 是 LangGraph 1.0+ 的人工中断机制
-      它会暂停图执行，等待外部输入（通过 Command）恢复
-      传入的字典会被作为 user_input 传递给 interrupt() 之后的代码
-
-    参数说明：
-      - state["article_content"]：AI 生成的文章草稿
-        用于显示给审核人员
+    interrupt() 是什么？
+      就像游戏里的暂停点——工作流跑到这里就停了，
+      等你通过 API 告诉我审核结果再继续。
 
     返回值说明：
-      Command 对象告诉 LangGraph 两件事：
-      1. update={}：恢复后要更新哪些状态字段
+      Command 告诉 LangGraph 两件事：
+      1. update={}：要更新哪些状态字段
       2. goto="xxx"：下一步要去哪个节点
-
-    典型场景：
-      # 用户 approve
-      return Command(update={"review_status": "approved", ...}, goto="extract_visuals")
-      -> 触发 extract_visuals 节点（生成配图）
-
-      # 用户 reject
-      return Command(update={"review_status": "rejected", "review_feedback": feedback, ...}, goto="write_draft")
-      -> 触发 write_draft 节点（根据反馈重写文章）
+        - "extract_visuals" = 用户点了通过 → 生成配图
+        - "write_draft" = 用户点了驳回 → 重写文章
     """
     article_content = state.get("article_content", "")
 
-    # ---------- 中断：等待人工审核 ----------
-    # interrupt() 的参数会传给恢复时的 user_input
-    # 这里传入审核所需的信息：文章内容、操作选项
+    # 暂停：等用户审核
     user_input = interrupt({
         "message": "请审核以下文章内容",
         "article_preview": article_content[:500] + "..." if len(article_content) > 500 else article_content,
@@ -100,8 +65,7 @@ async def human_review_node(state: AgentState) -> Command[Literal["extract_visua
         "options": ["approve", "reject"]
     })
 
-    # ---------- 解析用户审核结果 ----------
-    # user_input 是 API 通过 Command(resume={...}) 传入的字典
+    # 解析用户审核结果
     if isinstance(user_input, dict):
         action = user_input.get("action", "reject")
         feedback = user_input.get("feedback", "")
@@ -109,9 +73,9 @@ async def human_review_node(state: AgentState) -> Command[Literal["extract_visua
         action = "reject"
         feedback = ""
 
-    # ---------- 根据审核结果决定下一步 ----------
+    # 根据审核结果决定下一步
     if action == "approve":
-        # 审核通过：进入配图生成阶段
+        # 审核通过 → 进入配图生成阶段
         return Command(
             update={
                 "review_status": "approved",
@@ -121,7 +85,7 @@ async def human_review_node(state: AgentState) -> Command[Literal["extract_visua
             goto="extract_visuals"
         )
     else:
-        # 审核驳回：回到文章写作阶段（带反馈重写）
+        # 审核驳回 → 回到文章写作阶段（带反馈重写）
         return Command(
             update={
                 "review_status": "rejected",
@@ -133,38 +97,34 @@ async def human_review_node(state: AgentState) -> Command[Literal["extract_visua
 
 
 # =============================================================================
-# 第 2 步：构建工作流图
+# 构建工作流图
 # =============================================================================
 
 def build_workflow_graph() -> StateGraph:
     """
-    构建工作流图（LangGraph 1.0+ 语法）
+    把所有节点串成一条流水线
 
-    ==========================================================================
-    工作流程图：
+    工作流图：
       ┌──────────────┐
       │    START     │
       └──────┬───────┘
              │
              v
       ┌──────────────────┐
-      │ topic_selection  │  (子图)
-      │  ├─ plan_topics │
-      │  └─ interrupt() │  (等待选题)
+      │ topic_selection  │  (子图：AI 出题 + 等你选)
       └──────┬───────────┘
              │
              v
       ┌──────────────────┐
-      │   write_draft    │  (AI 生成文章)
+      │   write_draft    │  (AI 写文章)
       └──────┬───────────┘
              │
              v
       ┌──────────────────┐
-      │  human_review   │  (人工审核)
-      │  └─ interrupt() │  (等待审核)
+      │  human_review    │  (等用户审核)
       └──┬───────────┬──┘
          │           │
-    approve      reject
+    通过 │        驳回 │
          │           │
          v           v
    extract_visuals  write_draft
@@ -174,100 +134,50 @@ def build_workflow_graph() -> StateGraph:
          │
          v
          END
-
-    节点详解：
-      1. topic_selection（子图）：
-         - plan_topics：调用 LLM 生成 5 个候选选题
-         - human_select_topic：interrupt 等待用户选择
-      2. write_draft：调用 LLM 根据选题生成文章草稿
-      3. human_review：interrupt 等待用户审核（通过/驳回）
-      4. extract_visuals：调用 LLM 从文章中提取配图要点
-      5. generate_images：调用图片生成 API 生成配图
-
-    返回值：
-      StateGraph 实例（未编译），需要调用 .compile() 才可执行
     """
-    # ---------- 创建状态图 ----------
     workflow = StateGraph(AgentState)
 
-    # ---------- 获取编译好的选题子图 ----------
+    # 获取编译好的选题子图
     topic_selection_subgraph = get_compiled_topic_selection_subgraph()
 
-    # ---------- 添加节点（5 个） ----------
-    # 节点 1：选题子图（封装了选题相关的所有逻辑）
-    workflow.add_node("topic_selection", topic_selection_subgraph)
+    # 添加节点（5 个）
+    workflow.add_node("topic_selection", topic_selection_subgraph)  # 选题子图
+    workflow.add_node("write_draft", write_draft_node)  # 写文章
+    workflow.add_node("human_review", human_review_node)  # 人工审稿
+    workflow.add_node("extract_visuals", extract_visuals_node)  # 提取配图要点
+    workflow.add_node("generate_images", generate_images_node)  # 生成配图
 
-    # 节点 2：文章写作节点
-    workflow.add_node("write_draft", write_draft_node)
-
-    # 节点 3：人工审稿节点
-    workflow.add_node("human_review", human_review_node)
-
-    # 节点 4：提取配图要点节点
-    workflow.add_node("extract_visuals", extract_visuals_node)
-
-    # 节点 5：生成配图节点
-    workflow.add_node("generate_images", generate_images_node)
-
-    # ---------- 添加边（连接） ----------
-    # 边 1：Start -> topic_selection（开始工作流）
-    workflow.add_edge(START, "topic_selection")
-
-    # 边 2：topic_selection -> write_draft（选题完成后进入写作）
-    workflow.add_edge("topic_selection", "write_draft")
-
-    # 边 3：write_draft -> human_review（文章生成后等待审核）
-    workflow.add_edge("write_draft", "human_review")
-
-    # 边 4：human_review 是条件路由（在 human_review_node 中用 Command 指定）
-    #           approve -> extract_visuals -> generate_images -> END
-    #           reject -> write_draft（重写）
-
-    # 边 5：extract_visuals -> generate_images（要点提取后生成配图）
-    workflow.add_edge("extract_visuals", "generate_images")
-
-    # 边 6：generate_images -> END（配图生成后工作流完成）
-    workflow.add_edge("generate_images", END)
+    # 添加边（连接）
+    workflow.add_edge(START, "topic_selection")  # 开始 -> 选题
+    workflow.add_edge("topic_selection", "write_draft")  # 选题完 -> 写文章
+    workflow.add_edge("write_draft", "human_review")  # 文章写完 -> 等审核
+    # human_review 用 Command(goto=...) 决定下一步（在函数内部）
+    workflow.add_edge("extract_visuals", "generate_images")  # 提取完 -> 生成配图
+    workflow.add_edge("generate_images", END)  # 生成完 -> 结束
 
     return workflow
 
 
 # =============================================================================
-# 第 3 步：编译工作流图
+# 编译工作流图
 # =============================================================================
 
 async def get_compiled_graph():
     """
-    获取编译后的工作流图（带持久化 Checkpointer）
+    编译工作流图，让它可以被执行
 
-    ==========================================================================
     为什么需要编译？
-      StateGraph 只是定义了节点和边的结构
-      compile() 会：
-      1. 验证图的完整性（所有边的端点都存在）
-      2. 创建可执行的图对象
-      3. 绑定 Checkpointer（用于持久化状态）
+      StateGraph 只是定义了"有哪些节点"和"节点之间怎么连"
+      compile() 会验证图的完整性，然后生成一个可以实际运行的图
 
-    Checkpointer 说明：
-      每个工作流执行后，状态会被持久化到 PostgreSQL
-      下次调用时传入相同的 thread_id，可以从上次中断的地方继续
-      这就是"断点恢复"功能
-
-    LangGraph 1.0+ 中断机制：
-      1.0 以前用 interrupt_before/interrupt_after 参数指定中断节点
-      1.0+ 直接在节点函数中调用 interrupt()，更灵活
-      不需要显式指定中断节点，interrupt() 在哪就在哪中断
-
-    返回值：
-      CompiledStateGraph 实例，可以调用 .invoke() / .ainvoke()
+    Checkpointer 是干嘛的？
+      每个工作流执行后，状态会被存到 PostgreSQL
+      下次传入相同的 thread_id，可以从上次中断的地方继续
+      就像游戏存档一样
     """
-    # ---------- 获取 Checkpointer ----------
     checkpointer = await get_checkpointer()
-
-    # ---------- 构建工作流图 ----------
     workflow = build_workflow_graph()
 
-    # ---------- 编译图（绑定持久化） ----------
     compiled_graph = workflow.compile(
         checkpointer=checkpointer,
     )
@@ -276,7 +186,7 @@ async def get_compiled_graph():
 
 
 # =============================================================================
-# 第 4 步：获取图实例（单例）
+# 获取图实例（单例）
 # =============================================================================
 
 _compiled_graph = None
@@ -284,22 +194,11 @@ _compiled_graph = None
 
 async def get_graph():
     """
-    获取或创建编译后的图实例（单例模式）
+    获取编译后的图实例（单例模式）
 
-    ==========================================================================
     为什么用单例？
-      编译图是一个相对重的操作（验证、绑定）
-      工作流在服务生命周期内不会变化
-      只需要编译一次，之后直接复用
-
-    _compiled_graph：
-      全局变量存储编译后的图实例
-      首次调用时编译并缓存
-      后续调用直接返回缓存
-
-    为什么需要 async？
-      get_checkpointer() 内部可能需要初始化连接池
-      这是异步操作，所以 get_graph 也是 async
+      编译图比较慢，但工作流在服务运行时不会变
+      所以只编译一次，之后直接复用
     """
     global _compiled_graph
 
@@ -310,21 +209,12 @@ async def get_graph():
 
 
 # =============================================================================
-# 第 5 步：重置图实例
+# 重置图实例
 # =============================================================================
 
 async def reset_graph():
     """
-    重置图实例（用于重新初始化）
-
-    ==========================================================================
-    为什么需要这个？
-      某些测试场景需要重新编译图
-      或者 Checkpointer 连接断开后需要重建
-
-    注意：
-      重置后 _compiled_graph 为 None
-      下次 get_graph() 调用时会重新编译
+    重置图实例（测试用，或者 Checkpointer 连接断开时重建）
     """
     global _compiled_graph
     _compiled_graph = None

@@ -1,36 +1,4 @@
 {
-  /*
-   * =============================================================================
-   * 前端 npm 项目配置
-   * =============================================================================
-   *
-   * 职责说明：
-   *   定义前端项目的基本信息、npm scripts 命令、依赖和开发依赖。
-   *
-   * 字段含义：
-   *   - name: 项目名称（npm 包名）
-   *   - version: 语义化版本号
-   *   - type: "module" 启用 ES Module 语法（import/export）
-   *     - 典型场景：允许在 .js 文件中使用 ES Module，无需 .mjs 扩展名
-   *   - scripts: 可执行命令（npm run <script-name>）
-   *     - dev: vite 启动开发服务器，支持 HMR 热更新
-   *     - build: vite build 构建生产包（压缩、代码分割）
-   *     - preview: 预览生产构建结果
-   *   - dependencies: 生产环境依赖
-   *     - vue: ^3.4.0 - Vue 3 核心框架（使用 Composition API）
-   *     - axios: ^1.6.0 - HTTP 客户端（调用后端 API）
-   *   - devDependencies: 开发环境依赖
-   *     - @vitejs/plugin-vue: Vite 的 Vue 3 插件（支持 SFC 编译）
-   *     - vite: ^5.0.0 - 下一代前端构建工具（极速 HMR）
-   *
-   * 典型场景：
-   *   - npm install：安装所有 dependencies + devDependencies
-   *   - npm run dev：启动 Vite 开发服务器（默认 http://localhost:5173）
-   *   - npm run build：构建生产包到 dist/ 目录
-   *   - npm run preview：本地预览 dist/ 的构建产物
-   * =============================================================================
-   */
-
   "name": "ai-content-assistant",
   "version": "1.0.0",
   "type": "module",
