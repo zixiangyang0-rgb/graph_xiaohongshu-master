@@ -92,3 +92,8 @@ dist/
 
 # LangGraph 检查点
 checkpoints/
+
+# Python 虚拟环境
+venv/
+.venv/
+env/

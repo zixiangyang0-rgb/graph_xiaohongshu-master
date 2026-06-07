@@ -50,8 +50,15 @@ class Settings(BaseSettings):
     log_console: bool = True
     log_pii_anonymize: bool = True
 
+    # 开发调试
+    mock_enabled: bool = False
+
 
 @lru_cache()
 def get_settings() -> Settings:
     """单例：同一进程里只读一次配置。"""
     return Settings()
+
+
+# 全局 settings 实例，供模块级导入使用
+settings = Settings()

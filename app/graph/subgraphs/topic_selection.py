@@ -1,7 +1,15 @@
 """
-把“生成选题 + 等用户选择”这段单独拆成一个子图。
+选题子图模块 - 把"选题"这部分单独拆出来做成一个小流程
 
-这样主流程会更清楚，选题这段逻辑也更容易单独维护。
+通俗理解：
+  整个工作流挺长的（选题+写作+审核+配图），把选题相关的逻辑单独封装，
+  代码更清晰，主工作流更清爽。
+
+子图流程：
+  START -> plan_topics（AI 出题） -> human_select_topic（等你选） -> END
+
+interrupt() 在哪？
+  human_select_topic_node 里 —— AI 出完题就停下来，等你选了才继续。
 """
 from typing import Literal, Dict, Any
 from langgraph.graph import StateGraph, START, END
@@ -52,7 +60,7 @@ async def human_select_topic_node(state: AgentState) -> Command[Literal["__end__
             "selected_topic": selected_topic,
             "status": "topic_selected",
         },
-        goto=END
+        goto=END  # 结束子图，控制权返回主图
     )
 
 
@@ -64,14 +72,19 @@ def build_topic_selection_subgraph() -> StateGraph:
       START -> plan_topics（AI 生成选题） -> human_select_topic（等你选） -> END
     """
     subgraph = StateGraph(AgentState)
+
     subgraph.add_node("plan_topics", plan_topics_node)
     subgraph.add_node("human_select_topic", human_select_topic_node)
+
     subgraph.add_edge(START, "plan_topics")
     subgraph.add_edge("plan_topics", "human_select_topic")
+
     return subgraph
 
 
 def get_compiled_topic_selection_subgraph():
-    """获取编译好的选题子图"""
+    """
+    获取编译好的选题子图（直接返回可用版本）
+    """
     subgraph = build_topic_selection_subgraph()
     return subgraph.compile()
